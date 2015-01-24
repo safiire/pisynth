@@ -1,0 +1,253 @@
+Good evening fellow KVR'ers. After reading through some posts here and looking through some Java code and text files of mine I considered to do another post on 'zero-delay feedback filters'. 
+
+This post is meant to give all people interested in the very useful 'delay-removal' for feedback paths a starting point without going into too much detail. It also is meant to be a reference for myself, so I know a fixed location to look for this stuff . 
+
+I won't go into the details of the bilinear integrator here, so it's left as an exercise to the reader to do a bilinear transform of H(s) = 1/s and bring it into DFII transposed form. 
+
+Most of the final formulas given here are more or less legal (C/C++/Java) code.
+
+Anyways, it's a long post, a little bit messy but maybe it's helpful for others (and not only for me, as I'm using the described structures as my _only_ basic filter types). 
+
+For those who want to see a working implementation: Have a look here. This is the 'audio' package of my Java utils package. 
+
+Here we go (warning, long post ahead): 
+
+Bilinear integrator: 
+
+    out = f * in + buf 
+    buf = f * in + out 
+    
+    f   = tan(PI * fc / fs) 
+
+Transfer function: H(s) = 1/s 
+
+
+Lowpass filter: 
+
+A lowpass filter can be constructed from an integrator in a closed feedback loop:
+    out             = integ(in - out) 
+    out             = f * (in - out) + buf 
+
+Now we eliminate the (normally implemented) unit delay in the feedback path by solving for 'out': 
+    out             = f * in - f * out + buf 
+    out * (1 + f)   = f * in + buf 
+    out             = (f * in + buf) / (1 + f) 
+
+As '1/(1+f)' is widely used here we define: 
+    f2              = 1 / (1 + f) 
+
+so our output function looks like this: 
+    out             = (f * in + buf) * f2 
+
+and the final filter: 
+    out             = (f * in + buf) * f2 
+    buf             =  f * in + out 
+
+Transfer function: H(s) = 1 / (s + 1) 
+
+Derivation of the transfer function by using the closed loop transfer function: 
+    Y(s)       H(s) 
+    ---- = ------------- 
+    X(s)   1 + H(s)*G(s) 
+
+I switched 'G(s)' and 'H(s)' here to make clear which function we will substitue. 'G(s)' is the transfer function of the feedback path which is in our case: 
+    G(s) = 1 
+
+so we get: 
+    Y(s)       1/s          1      1         1        1 
+    ---- = ------------- =  - * ------- = ------- = ----- 
+    X(s)   1 + 1/s*1        s   1 + 1/s   s + s/s   s + 1 
+
+
+
+Highpass filter: 
+
+A high pass filter can be constructed by subtracting the lowpass output from the input: 
+    out = in - lpf(in)    
+    out = in - (f * in + buf) * f2 
+    out = in - f * f2 * in - f2 * buf 
+    out = (1 - f * f2) * in - f2 * buf 
+
+we define: 
+    f3  = (1 - f * f2) 
+
+so our output function looks like this: 
+    out = f3 * in - f2 * buf 
+
+and the final filter: 
+    out = (f *  in        + buf) * f2 
+    buf =  f * (in - out) + out 
+    out = in - out 
+
+Transfer function: H(s) = s / (s + 1) 
+
+Derivation of transfer function: 
+             1     (s + 1) - 1     s 
+H(s) = 1 - ----- = ----------- = ----- 
+           s + 1      s + 1      s + 1 
+
+
+
+Lowpass filter with variable feedback: 
+
+For modelling of complex filters it can be useful to have a generic 1-pole lowpass filter with variable feedback. The transfer function of such a filter will look like this: 
+    H(s) = 1 / (s + fb) 
+
+where 'fb' is our feedback factor. 
+
+I'll just post the resulting formulas here, as the derivation is similar to that of the lowpass filter above: 
+    f2 = 1 / (1 + f * fb) 
+
+Output function: 
+    out             = (f * in + buf) * f2 
+
+Final filter: 
+    out             = (f *  in             + buf) * f2 
+    buf             =  f * (in - fb * out) + out 
+
+
+
+Lowpass filter for resonant filter structures: 
+
+If we want to build a generic 2-pole ladder filter with feedback like this here: 
+    in -+-> [ LPF ] -> [ LPF ] -+-> out 
+        |                       | 
+        +--------<-[*k]-<-------+ 
+
+we will also have to remove the unit delay in this feedback path by solving for 'out' in the following (lpf) equation: 
+    out = lpf(in - k * out) 
+    out = (f * (in - k * out) + buf) * f2 
+    out = (f * in - f * k * out + buf) * f2 
+    out = f * f2 * in - f * f2 * k * out + f2 * buf 
+    out * (1 + f * f2 * k) = f * f2 * in + f2 * buf 
+    out * (1 + f * f2 * k) = (f * in + buf) * f2 
+    out = (f * in + buf) * f2 * (1 / (1 + f * f2 * k)) 
+
+The nice thing with this formula is that we can easily chain it to form ladder filters, I'll come back to this later. 
+
+
+Highpass filter for resonant filter structures: 
+
+Here's the same thing for the highpass filter: 
+    out = hp(in - k * out) 
+    out =  f3 * (in - k * out) - f2 * buf 
+    out =  f3 * in - f3 *k * out - f2 * buf 
+    out = (f3 * in - f2 * buf) * (1 / (1 + f3 * k)) 
+
+
+
+
+Filter chaining with feedback: 
+
+First, let's set up some stuff. The reason why I always said 'output function' and 'final filter' will be made clear here. Say we define a lowpass filter having three methods: 
+    double output(double in) 
+        This one returns the value of the 'output function' 
+        without altering the state variables (buf). 
+    
+    double tick(double int) 
+        This one updates the state variable and returns 'out' 
+        ('final filter'). 
+    
+    double coef(double prev) 
+        This one is used for filter chaining and will be explained
+        in detail just _now_. 
+
+Let's have a look again at the feedback function for the LPF and HPF: 
+    LPF: out = (f * in + buf) * f2 * (1 / (1 + f * f2 * k)) 
+         out = LPF(in) * (1 / (1 + f * f2 * k)) 
+    HPF: out = (f3 * in - f2 * buf) * (1 / (1 + f3 * k)) 
+         out = HPF(in) * (1 / (1 + f3 * k)) 
+
+It can be seen (left as an exercise for the reader) that we can chain multiple LPF/HPF using the coef function: 
+    LPF: double coef(double prev) -> return prev * f * f2; 
+    HPF: double coef(double prev) -> return prev * f3; 
+
+Now, having all our methods ready, here's an example which chains two LPFs and two HPFs to build a resonant bandpass filter: 
+    lpf0 and lpf1 are our LPFs 
+    hpf0 and hpf1 are our HPFs 
+    k is the feedback factor 
+
+First we calculate our feedback coefficient (which is a simple chaining of 'coef' calls, as I mentioned before): 
+    double fbcoef = 1.0 / (1.0 + k * 
+      hfp1.coef(hpf0.coef(lpf1.coef(lpf0.coef(1))))); 
+
+And our filter would now look like this: 
+    double fb = fbcoef * 
+      hpf1.output(hpf0.output(lpf1.output(lpf0.output(in)))); 
+    return hp1.tick(hpf0.tick(lpf1.tick(lpf0.tick(in - k * fb))));
+
+... and that's all. This chaining works for all combinations of LPFs and HPFs and even for different cutoff settings per pole. 
+
+If you chain the 'variable feedback LPF' you can even specify the pole positions for the filter, e.g. 
+                       1 
+    H(s) = --------------------------- 
+           (s + 2) * (s + 1) * (s - 1) 
+
+can be realized by chaining three 'vf LPFs' with 'fb' set to 2, 1 and -1 respectively. 
+
+
+Zero-delay SVFs as second building blocks: 
+
+To create more sophisticated filters we need at least two generic types of building blocks: 
+    a generic one pole with variable feedback 
+    a generic two pole (SVF) with variable coefficients 
+
+Chaining these blocks with some different gain factors for each block or SVF output allows us to model (nearly) every transfer by just transfering the factors in the analogue transfer function into our coefficients. 
+
+Here's a generic SVF drawn using my amazing ASCII art skillz: 
+         high             band 
+          |                | 
+    in ->-+-->-[ INTEG ]->-+->-[ INTEG ]-+-> low 
+          |                |             | 
+       [ *-1 ]--<-[ *k ]-<-+             | 
+          |                              | 
+       [ *-1 ]-----------<---------------+ 
+
+Here are the three transfer functions for the three outputs: 
+                     1 
+    Hlow(s)  = --------------- 
+               s^2 + k * s + 1 
+    
+                     s 
+    Hband(s) = --------------- 
+               s^2 + k * s + 1 
+    
+                    s^2 
+    Hhigh(s) = --------------- 
+               s^2 + k * s + 1 
+
+If now we define three gain parameters (Ghigh, Gband and Glow) and add all three SVF outputs multiplied by it's corresponding gain variable, we get the following transfer function: 
+           Ghigh * s^2 + Gband * s + Glow 
+    H(s) = ------------------------------ 
+                 s^2 + k * s + 1 
+
+I'm a bit lazy here and just post the final formulas for the zero-delay SVF (using bilinear integrators), but the derivation is basically the same as usual (solve for 'out'): 
+
+We define: 
+    f   = tan(PI * fc / fs) 
+    t   = 1 / (1 + k * f) 
+    u   = 1 / (1 + t * f * f) 
+    tf  = t * f 
+    bl  -> second integrator buffer 
+    bh  -> first integrator buffer 
+
+now we get (final filter): 
+    low     = (bl + tf * (bb + f * in)) * u 
+    band    = (bb + f * (in - low)) * t 
+    high    = in - low - k * band 
+    
+    bb      = band + f * high 
+    bl      = low  + f * band 
+
+I did not yet bother about deriving a feedback formula for the SVF to chain two or more in a feedback loop, but it won't make much sense here because the feedback is directly controlled by 'k'. 
+
+If you want more fancy filter structures, try to extend the SVF above to form a 3-pole or even 4-pole configuration. Linkwitz-Riley crossover is the recommended form for those (the 2-pole SVF above is in fact also a Linkwitz-Riley crossover). 
+
+The resulting transfer function for a 4-pole SVF with variable feedbacks, summed and multiplied by per-output gains looks something like this: 
+           b0*s^4 + b1*s^3 + b2*s^2 + b3*s + b4 
+    H(s) = ------------------------------------ 
+              s^4 + a1*s^3 + a2*s^2 + a3*s + a4 
+
+Using the above filter you can (more or less) emulate every analogue filter by just filling in the analogue transfer function's coefficients into the 4-pole SVF without any fancy/nasty stuff and without the usual instabilities which would be caused by using 4-pole biquad sections instead. 
+
+Feel free to ask questions, also my response times might be long, so beware.
