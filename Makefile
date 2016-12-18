@@ -1,5 +1,5 @@
 
-CXX = g++
+CXX = clang++ 
 OBJ = main.o audio_buffer.o \
 			input/manager.o \
 			input/sources/base.o input/sources/midi_file.o input/sources/test.o \
@@ -8,8 +8,8 @@ OBJ = main.o audio_buffer.o \
 
 DEFS = -Dforeach=BOOST_FOREACH
 BIN = dist/synth
-FLAGS = -g -I . -Wall ${DEFS} #-Wextra -pedantic
-LDFLAGS = -g -l portaudio
+FLAGS = -g -I . -Wall ${DEFS} -std=c++1y -stdlib=libc++ -O3 #-Wall -Wextra
+LDFLAGS = -g -l portaudio -std=c++1y -stdlib=libc++
 
 
 $(BIN): $(OBJ)
